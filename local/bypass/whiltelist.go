@@ -3,11 +3,13 @@ package localbypass
 import (
 	"bufio"
 	"fmt"
+	"encoding/json"
 	"io"
 	"l5proxy_cv/mydns"
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 
@@ -91,4 +93,26 @@ func (mgr *Mgr) loadWhitelist() {
 		mgr.whitelistLock.Unlock()
 		break
 	}
+}
+
+func loadBlacklistFile(filePath string) (map[string]struct{}, error) {
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		return nil, fmt.Errorf("read blacklist file failed: %w", err)
+	}
+
+	var hosts []string
+	if err := json.Unmarshal(data, &hosts); err != nil {
+		return nil, fmt.Errorf("parse blacklist JSON failed: %w", err)
+	}
+
+	blacklist := make(map[string]struct{})
+	for _, host := range hosts {
+		host = strings.TrimSpace(host)
+		if len(host) > 0 {
+			blacklist[host] = struct{}{}
+		}
+	}
+
+	return blacklist, nil
 }

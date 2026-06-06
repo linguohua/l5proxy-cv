@@ -13,7 +13,8 @@ import (
 )
 
 type LocalConfig struct {
-	WhitelistURL string
+	WhitelistURL  string
+	BlacklistFile string
 
 	Protector func(fd uint64)
 
@@ -37,6 +38,9 @@ type Mgr struct {
 
 	whitelistLock sync.Mutex
 	whitelist     map[string]struct{}
+
+	blacklistLock sync.Mutex
+	blacklist     map[string]struct{}
 }
 
 func NewMgr(cfg *LocalConfig) meta.Local {
@@ -44,6 +48,7 @@ func NewMgr(cfg *LocalConfig) meta.Local {
 		cfg: *cfg,
 
 		whitelist: make(map[string]struct{}),
+		blacklist: make(map[string]struct{}),
 	}
 
 	return mgr
@@ -61,6 +66,8 @@ func (mgr *Mgr) Startup() error {
 	if !mgr.cfg.All {
 		go mgr.loadWhitelist()
 	}
+
+	mgr.loadBlacklist()
 
 	mgr.isActivated = true
 
@@ -173,6 +180,11 @@ func (mgr *Mgr) BypassAble(ipOrDomainName string) bool {
 		return false
 	}
 
+	// Blacklist takes priority — hosts in blacklist must go through remote proxy
+	if mgr.isDomainInBlacklist(ipOrDomainName) {
+		return false
+	}
+
 	if mgr.cfg.All {
 		return true
 	}
@@ -189,6 +201,10 @@ func (mgr *Mgr) BypassAble(ipOrDomainName string) bool {
 }
 
 func (mgr *Mgr) BypassAbleDomain(domainName string) bool {
+	// Blacklist takes priority — hosts in blacklist must go through remote proxy
+	if mgr.isDomainInBlacklist(domainName) {
+		return false
+	}
 	return mgr.isDomainInWhitelist(domainName)
 }
 
@@ -202,6 +218,31 @@ func (mgr *Mgr) isDomainInWhitelist(domainName string) bool {
 	defer mgr.whitelistLock.Unlock()
 
 	return isDomainIn(domainName, mgr.whitelist)
+}
+
+func (mgr *Mgr) isDomainInBlacklist(domainName string) bool {
+	mgr.blacklistLock.Lock()
+	defer mgr.blacklistLock.Unlock()
+
+	return isDomainIn(domainName, mgr.blacklist)
+}
+
+func (mgr *Mgr) loadBlacklist() {
+	if mgr.cfg.BlacklistFile == "" {
+		return
+	}
+
+	m, err := loadBlacklistFile(mgr.cfg.BlacklistFile)
+	if err != nil {
+		log.Errorf("localbypass load blacklist file %s failed: %s", mgr.cfg.BlacklistFile, err)
+		return
+	}
+
+	mgr.blacklistLock.Lock()
+	mgr.blacklist = m
+	mgr.blacklistLock.Unlock()
+
+	log.Infof("localbypass.Mgr load blacklist host count: %d", len(m))
 }
 
 var (

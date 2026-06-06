@@ -69,10 +69,11 @@ func (xy *XY) Startup(cfg *config.Config) error {
 
 	if cfg.BypassMode.Enabled {
 		localCfg := &localbypass.LocalConfig{
-			WhitelistURL: cfg.BypassMode.WhitelistURL,
-			Protector:    protector,
-			AliDNS:       cfg.Server.AliDNS,
-			All:          cfg.BypassMode.All,
+			WhitelistURL:  cfg.BypassMode.WhitelistURL,
+			BlacklistFile: cfg.BypassMode.BlacklistFile,
+			Protector:     protector,
+			AliDNS:        cfg.Server.AliDNS,
+			All:           cfg.BypassMode.All,
 		}
 
 		mgr := localbypass.NewMgr(localCfg)

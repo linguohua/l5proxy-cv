@@ -37,9 +37,10 @@ type Tunnel struct {
 }
 
 type BypassMode struct {
-	Enabled      bool   `toml:"enabled"`
-	All          bool   `toml:"all"`
-	WhitelistURL string `toml:"whitelist"`
+	Enabled       bool   `toml:"enabled"`
+	All           bool   `toml:"all"`
+	WhitelistURL  string `toml:"whitelist"`
+	BlacklistFile string `toml:"blacklist"`
 }
 
 type HTTPMode struct {

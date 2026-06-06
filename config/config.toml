@@ -17,6 +17,8 @@ cap = 100
 [bypass]
 enabled = true
 whitelist = "https://js.llwan.top/lFDBu0WTbYuClhPzXEFHyE3UWTicYU7dq9zhPLf5kqrDjOW2schlH2W5w8ZxQBV8/whitelist"
+# blacklist: 本地JSON文件路径，数组格式，列表中的host强制走远程代理（优先级高于whitelist）
+# blacklist = "black-host.json"
 
 [tun]
 enabled = false
