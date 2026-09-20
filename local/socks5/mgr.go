@@ -23,8 +23,9 @@ type LocalConfig struct {
 	Address   string
 	UseBypass bool
 
-	TransportHandler meta.HTTPSocks5TransportHandler
-	BypassHandler    meta.Bypass
+	TransportHandler    meta.HTTPSocks5TransportHandler
+	UDPTransportHandler meta.UDPTransportHandler
+	BypassHandler       meta.Bypass
 }
 
 type Mgr struct {
@@ -34,6 +35,12 @@ type Mgr struct {
 }
 
 func NewMgr(cfg *LocalConfig) meta.Local {
+	if cfg.UDPTransportHandler == nil && cfg.TransportHandler != nil {
+		if u, ok := cfg.TransportHandler.(meta.UDPTransportHandler); ok {
+			cfg.UDPTransportHandler = u
+		}
+	}
+
 	mgr := &Mgr{
 		cfg: *cfg,
 	}
@@ -225,10 +232,39 @@ func (mgr *Mgr) handleSocks5Bind(req *request) error {
 }
 
 func (mgr *Mgr) handleSocks5Associate(req *request) error {
-	// TODO: Support associate
-	if err := replySocks5Client(req.conn, commandNotSupported, nil); err != nil {
-		return fmt.Errorf("failed to send reply: %v", err)
+	udpHandler := mgr.cfg.UDPTransportHandler
+	if udpHandler == nil {
+		if err := replySocks5Client(req.conn, commandNotSupported, nil); err != nil {
+			return fmt.Errorf("failed to send reply: %v", err)
+		}
+		return fmt.Errorf("unsupported socks5 Associate command: no UDPTransportHandler")
 	}
 
-	return fmt.Errorf("unsupport socks5 Associate command")
+	session, err := newUDPSession(mgr, req)
+	if err != nil {
+		_ = replySocks5Client(req.conn, serverFailure, nil)
+		return fmt.Errorf("failed to create UDP session: %v", err)
+	}
+	defer session.close()
+
+	// Reply with the relay UDP address
+	bind := addrSpec{ip: session.bindIP, port: session.bindPort}
+	if err := replySocks5Client(req.conn, successReply, &bind); err != nil {
+		return fmt.Errorf("failed to send reply to socks5 client: %v", err)
+	}
+
+	// Serve UDP forwarding
+	go session.serveUDP()
+
+	// RFC 1928: A UDP association terminates when the TCP connection that the
+	// UDP ASSOCIATE request arrived on terminates.
+	buf := make([]byte, 1)
+	for {
+		_, err := req.conn.Read(buf)
+		if err != nil {
+			break
+		}
+	}
+
+	return nil
 }

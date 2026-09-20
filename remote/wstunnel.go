@@ -550,17 +550,17 @@ func (tnl *WSTunnel) onClientCreateByDomain(req *Req, target *meta.HTTPSocksTarg
 }
 
 func (tnl *WSTunnel) acceptUDPConn(conn meta.UDPConn, extra []byte) error {
-	src := &net.UDPAddr{Port: int(conn.ID().RemotePort), IP: conn.ID().RemoteAddress.AsSlice()}
-	dst := &net.UDPAddr{Port: int(conn.ID().LocalPort), IP: conn.ID().LocalAddress.AsSlice()}
+	ustub := newUdpStub(tnl, conn)
+	src := ustub.srcAddress()
+	dst := ustub.dstAddress()
 
 	log.Infof("acceptUDPConn src %s dst %s", src.String(), dst.String())
 
-	ustub := tnl.cache.get(src, dst)
-	if ustub != nil {
+	existing := tnl.cache.get(src, dst)
+	if existing != nil {
 		return fmt.Errorf("conn src %s dst %s already exist", src.String(), dst.String())
 	}
 
-	ustub = newUdpStub(tnl, conn)
 	tnl.cache.add(ustub)
 	ustub.proxy(extra)
 
@@ -568,46 +568,52 @@ func (tnl *WSTunnel) acceptUDPConn(conn meta.UDPConn, extra []byte) error {
 }
 
 func (tnl *WSTunnel) onServerUDPData(msg []byte) error {
-	src := parseUDPAddrss(msg[1:])
-
-	srcipLen := net.IPv6len
-	if src.IP.To4() != nil {
-		srcipLen = net.IPv4len
+	if len(msg) < 1 {
+		return fmt.Errorf("empty udp msg")
 	}
 
-	dst := parseUDPAddrss(msg[1+3+srcipLen:])
+	src, n1, err := ParseUDPAddr(msg[1:])
+	if err != nil {
+		log.Errorf("onServerUDPData parse src failed: %v", err)
+		return err
+	}
 
-	dstipLen := net.IPv6len
-	if dst.IP.To4() != nil {
-		dstipLen = net.IPv4len
+	dst, n2, err := ParseUDPAddr(msg[1+n1:])
+	if err != nil {
+		log.Errorf("onServerUDPData parse dst failed: %v", err)
+		return err
 	}
 
 	log.Debugf("onServerUDPData src %s dst %s", src.String(), dst.String())
 
 	ustub := tnl.cache.get(src, dst)
 	if ustub == nil {
-		conn, err := tnl.newUDP(src, dst)
-		if err != nil {
-			log.Errorf("onServerUDPData new UDPConn src %s dst %s failed, %s", src.String(), dst.String(), err.Error())
+		if len(src.Domain) == 0 && len(dst.Domain) == 0 && tnl.mgr.localGvisor != nil {
+			conn, err := tnl.newUDP(src.ToNetUDPAddr(), dst.ToNetUDPAddr())
+			if err != nil {
+				log.Errorf("onServerUDPData new UDPConn src %s dst %s failed, %s", src.String(), dst.String(), err.Error())
+				return nil
+			}
+
+			ustub = newUdpStub(tnl, conn)
+			tnl.cache.add(ustub)
+			go ustub.proxy(nil)
+
+			log.Infof("onServerUDPData, new UDPConn src %s dst %s for reverse proxy", src.String(), dst.String())
+		} else {
+			log.Warnf("onServerUDPData cannot find udp stub src %s dst %s", src.String(), dst.String())
 			return nil
 		}
-
-		ustub = newUdpStub(tnl, conn)
-		tnl.cache.add(ustub)
-		go ustub.proxy(nil)
-
-		log.Infof("onServerUDPData, new UDPConn src %s dst %s for reverse proxy", src.String(), dst.String())
 	}
 
-	// 7 = cmd + ipType1 + port1 + ipType2 + port2
-	skip := 7 + srcipLen + dstipLen
-	return ustub.writeTo(msg[skip:], src)
+	skip := 1 + n1 + n2
+	return ustub.writeTo(msg[skip:], src.ToNetUDPAddr())
 }
 
-func (tnl *WSTunnel) onClientUDPData(msg []byte, src, dst *net.UDPAddr) error {
-	log.Debugf("onClientUDPData src %s, dst %s", src, dst)
-	srcAddrBuf := writeUDPAddress(src)
-	dstAddrBuf := writeUDPAddress(dst)
+func (tnl *WSTunnel) onClientUDPData(msg []byte, src, dst *UDPAddr) error {
+	log.Debugf("onClientUDPData src %s, dst %s", src.String(), dst.String())
+	srcAddrBuf := src.WriteAddress()
+	dstAddrBuf := dst.WriteAddress()
 
 	buf := make([]byte, 1+len(srcAddrBuf)+len(dstAddrBuf)+len(msg))
 

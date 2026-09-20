@@ -111,10 +111,11 @@ func (xy *XY) Startup(cfg *config.Config) error {
 
 	if cfg.Socks5Mode.Enabled {
 		localCfg := &localsocks5.LocalConfig{
-			TransportHandler: remote,
-			Address:          cfg.Socks5Mode.Address,
-			UseBypass:        cfg.Socks5Mode.Bypass && bypass != nil,
-			BypassHandler:    bypass,
+			TransportHandler:    remote,
+			UDPTransportHandler: remote,
+			Address:             cfg.Socks5Mode.Address,
+			UseBypass:           cfg.Socks5Mode.Bypass && bypass != nil,
+			BypassHandler:       bypass,
 		}
 
 		locals = append(locals, localsocks5.NewMgr(localCfg))

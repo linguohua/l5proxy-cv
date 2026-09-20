@@ -1,9 +1,7 @@
 package remote
 
 import (
-	"encoding/binary"
-	"encoding/hex"
-	"net"
+	"fmt"
 	"sync"
 	"time"
 
@@ -32,13 +30,27 @@ func (c *UdpCache) add(ustub *UdpStub) {
 	c.ustubs.Store(key, ustub)
 }
 
-func (c *UdpCache) get(src, dst *net.UDPAddr) *UdpStub {
+func (c *UdpCache) get(src, dst *UDPAddr) *UdpStub {
 	key := c.key(src, dst)
 	v, ok := c.ustubs.Load(key)
 	if ok {
 		return v.(*UdpStub)
 	}
-	return nil
+
+	// Fallback lookup: if remote server replied with resolved IP while
+	// the client originally sent a domain, match by client src and target port
+	var match *UdpStub
+	srcStr := src.String()
+	c.ustubs.Range(func(_, value any) bool {
+		ustub, ok := value.(*UdpStub)
+		if ok && ustub.srcAddress().String() == srcStr && ustub.dstAddress().Port == dst.Port {
+			match = ustub
+			return false
+		}
+		return true
+	})
+
+	return match
 }
 
 func (c *UdpCache) keepalive() {
@@ -63,19 +75,13 @@ func (c *UdpCache) keepalive() {
 		c.ustubs.Delete(key)
 		log.Debugf("delete UDPConn src %s dst %s", ustub.srcAddress().String(), ustub.dstAddress().String())
 	}
-
 }
 
-func (c *UdpCache) key(src, dst *net.UDPAddr) string {
-	buf := make([]byte, 4+len(src.IP)+len(dst.IP))
-
-	binary.LittleEndian.PutUint16(buf[0:], uint16(src.Port))
-	copy(buf[2:], src.IP)
-
-	binary.LittleEndian.PutUint16(buf[2+len(src.IP):], uint16(dst.Port))
-	copy(buf[4+len(src.IP):], dst.IP)
-
-	return hex.EncodeToString(buf)
+func (c *UdpCache) key(src, dst *UDPAddr) string {
+	if len(dst.Domain) > 0 {
+		return fmt.Sprintf("%s->%s:%d", src.String(), dst.Domain, dst.Port)
+	}
+	return fmt.Sprintf("%s->%s", src.String(), dst.String())
 }
 
 func (c *UdpCache) cleanup() {

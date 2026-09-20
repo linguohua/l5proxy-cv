@@ -23,13 +23,19 @@ type UDPConn interface {
 
 	// ID returns the transport endpoint id of UDPConn.
 	ID() *stack.TransportEndpointID
+	TargetDomain() string
+}
+
+// UDPTransportHandler is a UDP connection handler that implements HandleUDP method.
+type UDPTransportHandler interface {
+	HandleUDP(UDPConn, []byte)
 }
 
 // TunTransportHandler is a TCP/UDP connection handler that implements
 // HandleTCP and HandleUDP methods.
 type TunTransportHandler interface {
 	HandleTCP(TCPConn)
-	HandleUDP(UDPConn, []byte)
+	UDPTransportHandler
 
 	OnStackReady(LocalGivsorNetwork)
 }

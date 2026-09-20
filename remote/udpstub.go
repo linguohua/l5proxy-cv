@@ -20,16 +20,26 @@ func newUdpStub(tnl *WSTunnel, conn meta.UDPConn) *UdpStub {
 	return ustub
 }
 
-func (u *UdpStub) srcAddress() *net.UDPAddr {
+func (u *UdpStub) srcAddress() *UDPAddr {
 	conn := u.conn
-	address := &net.UDPAddr{Port: int(conn.ID().RemotePort), IP: conn.ID().RemoteAddress.AsSlice()}
-	return address
+	ip := conn.ID().RemoteAddress.AsSlice()
+	if ip4 := net.IP(ip).To4(); ip4 != nil {
+		ip = ip4
+	}
+	return &UDPAddr{Port: int(conn.ID().RemotePort), IP: ip}
 }
 
-func (u *UdpStub) dstAddress() *net.UDPAddr {
+func (u *UdpStub) dstAddress() *UDPAddr {
 	conn := u.conn
-	address := &net.UDPAddr{Port: int(conn.ID().LocalPort), IP: conn.ID().LocalAddress.AsSlice()}
-	return address
+	domain := conn.TargetDomain()
+	if len(domain) > 0 {
+		return &UDPAddr{Port: int(conn.ID().LocalPort), Domain: domain}
+	}
+	ip := conn.ID().LocalAddress.AsSlice()
+	if ip4 := net.IP(ip).To4(); ip4 != nil {
+		ip = ip4
+	}
+	return &UDPAddr{Port: int(conn.ID().LocalPort), IP: ip}
 }
 
 func (u *UdpStub) writeTo(data []byte, addr net.Addr) error {

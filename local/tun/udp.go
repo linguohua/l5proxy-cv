@@ -48,3 +48,7 @@ type udpConn struct {
 func (c *udpConn) ID() *stack.TransportEndpointID {
 	return &c.id
 }
+
+func (c *udpConn) TargetDomain() string {
+	return ""
+}
