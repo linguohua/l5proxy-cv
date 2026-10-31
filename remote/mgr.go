@@ -5,6 +5,7 @@ import (
 	"l5proxy_cv/meta"
 	"l5proxy_cv/mydns"
 	"net/url"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -25,16 +26,25 @@ type MgrConfig struct {
 	TunnelCount  int
 	TunnelCap    int
 
-	KeepaliveSeconds int
-	KeepaliveLog     bool
+	MaxAgeSeconds      int
+	DrainSeconds       int
+	RTTRebuild         bool
+	IdleTimeoutSeconds int
+	KeepaliveSeconds   int
+	KeepaliveLog       bool
 
 	Protector func(fd uint64)
 }
 
 type Mgr struct {
-	config  MgrConfig
-	index   atomic.Uint64
-	tunnels []*WSTunnel
+	mu          sync.Mutex
+	pending     map[*WSTunnel]*WSTunnel
+	draining    map[*WSTunnel]time.Time
+	done        chan struct{}
+	lastRebuild time.Time
+	config      MgrConfig
+	index       atomic.Uint64
+	tunnels     []*WSTunnel
 
 	isActivated bool
 
@@ -45,6 +55,9 @@ type Mgr struct {
 
 func NewMgr(config *MgrConfig) IMgr {
 	cfg := *config
+	if cfg.KeepaliveSeconds <= 0 {
+		cfg.KeepaliveSeconds = 5
+	}
 	if cfg.IsDummy {
 		return &DummyMgr{
 			config: cfg,
@@ -85,12 +98,17 @@ func (mgr *Mgr) OnStackReady(localGvisor meta.LocalGivsorNetwork) {
 }
 
 func (mgr *Mgr) Startup() error {
+	mgr.mu.Lock()
+	defer mgr.mu.Unlock()
 	log.Info("remote.Mgr.Startup called")
 
 	if mgr.isActivated {
 		return fmt.Errorf("remote.Mgr already startup")
 	}
 
+	mgr.pending = make(map[*WSTunnel]*WSTunnel)
+	mgr.draining = make(map[*WSTunnel]time.Time)
+	mgr.done = make(chan struct{})
 	config := &mgr.config
 
 	mgr.tunnels = make([]*WSTunnel, 0, config.TunnelCount)
@@ -115,45 +133,36 @@ func (mgr *Mgr) Startup() error {
 }
 
 func (mgr *Mgr) Shutdown() error {
-	log.Info("remote.Mgr.Shutdown called")
-
+	mgr.mu.Lock()
+	defer mgr.mu.Unlock()
 	if !mgr.isActivated {
-		return fmt.Errorf("remote.Mgr isn't startup")
+		return fmt.Errorf("manager not started")
 	}
-
-	count := len(mgr.tunnels)
-	for i := 0; i < count; i++ {
-		tnl := mgr.tunnels[i]
-		tnl.stop()
-	}
-
 	mgr.isActivated = false
-
-	log.Info("remote.Mgr.Shutdown completed")
+	close(mgr.done)
+	for _, t := range mgr.tunnels {
+		t.stop()
+	}
+	for _, t := range mgr.pending {
+		t.stop()
+	}
+	for t := range mgr.draining {
+		t.stop()
+	}
 	return nil
 }
 
 func (mgr *Mgr) keepalive() {
-	count := len(mgr.tunnels)
-
-	log.Infof("remote.Mgr keepalive goroutine start, tunnel count:%d, keepalive interval:%ds",
-		count, mgr.config.KeepaliveSeconds)
-
-	for mgr.isActivated {
-		time.Sleep(time.Second * time.Duration(mgr.config.KeepaliveSeconds))
-
-		for i := 0; i < count; i++ {
-			tnl := mgr.tunnels[i]
-			tnl.keepalive()
-		}
-
-		for i := 0; i < count; i++ {
-			tnl := mgr.tunnels[i]
-			tnl.cache.keepalive()
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-mgr.done:
+			return
+		case now := <-ticker.C:
+			mgr.maintain(now)
 		}
 	}
-
-	log.Info("remote.Mgr keepalive goroutine exit")
 }
 
 func (mgr *Mgr) HandleTCP(conn meta.TCPConn) {
@@ -165,6 +174,8 @@ func (mgr *Mgr) HandleTCP(conn meta.TCPConn) {
 		log.Errorf("mgr.allocateWSTunnel failed: %v", err)
 		return
 	}
+
+	defer tunnel.users.Add(-1)
 
 	log.Infof("proxy[tun/tcp] to %s", conn.ID().LocalAddress.String())
 
@@ -186,6 +197,8 @@ func (mgr *Mgr) HandleHttpSocks5TCP(conn meta.TCPConn, target *meta.HTTPSocksTar
 		return
 	}
 
+	defer tunnel.users.Add(-1)
+
 	log.Infof("proxy[http-socks5/tcp] to %s:%d", target.DomainName, target.Port)
 
 	err = tunnel.acceptHttpSocks5TCPConn(conn, target)
@@ -205,6 +218,8 @@ func (mgr *Mgr) HandleUDP(conn meta.UDPConn, extra []byte) {
 		return
 	}
 
+	defer tunnel.users.Add(-1)
+
 	log.Infof("proxy[tun/udp] to %s", conn.ID().LocalAddress.String())
 
 	err = tunnel.acceptUDPConn(conn, extra)
@@ -223,6 +238,11 @@ func (mgr *Mgr) nextAllocIndex() uint64 {
 }
 
 func (mgr *Mgr) allocateWSTunnel() (*WSTunnel, error) {
+	mgr.mu.Lock()
+	defer mgr.mu.Unlock()
+	if !mgr.isActivated {
+		return nil, fmt.Errorf("manager stopped")
+	}
 	if len(mgr.tunnels) < 1 {
 		return nil, fmt.Errorf("tunnels array is empty")
 	}
@@ -232,7 +252,8 @@ func (mgr *Mgr) allocateWSTunnel() (*WSTunnel, error) {
 
 	for {
 		tnl := mgr.tunnels[index]
-		if tnl.isValid() {
+		if tnl.available() {
+			tnl.users.Add(1)
 			return tnl, nil
 		}
 

@@ -62,7 +62,7 @@ func (c *UdpCache) keepalive() {
 	c.ustubs.Range(func(key, value any) bool {
 		ustub, ok := value.(*UdpStub)
 		if ok {
-			if time.Since(ustub.lastActvity) > udpTimeOut {
+			if ustub.tnl.idleTimeout > 0 && time.Since(time.Unix(0, ustub.lastActvity.Load())) >= ustub.tnl.idleTimeout {
 				deleteUstubs = append(deleteUstubs, ustub)
 			}
 		}
@@ -89,6 +89,7 @@ func (c *UdpCache) cleanup() {
 		ustub, ok := value.(*UdpStub)
 		if ok {
 			ustub.close()
+			c.ustubs.CompareAndDelete(key, ustub)
 		}
 		return true
 	})

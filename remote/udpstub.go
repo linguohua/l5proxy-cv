@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"l5proxy_cv/meta"
 	"net"
+	"sync/atomic"
 	"time"
 
 	log "github.com/sirupsen/logrus"
@@ -12,11 +13,12 @@ import (
 type UdpStub struct {
 	tnl         *WSTunnel
 	conn        meta.UDPConn
-	lastActvity time.Time
+	lastActvity atomic.Int64
 }
 
 func newUdpStub(tnl *WSTunnel, conn meta.UDPConn) *UdpStub {
 	ustub := &UdpStub{tnl: tnl, conn: conn}
+	ustub.lastActvity.Store(time.Now().UnixNano())
 	return ustub
 }
 
@@ -48,7 +50,7 @@ func (u *UdpStub) writeTo(data []byte, addr net.Addr) error {
 		return fmt.Errorf("write udp conn == nil")
 	}
 
-	u.lastActvity = time.Now()
+	u.touch()
 
 	wrote := 0
 	l := len(data)
@@ -68,7 +70,7 @@ func (u *UdpStub) writeTo(data []byte, addr net.Addr) error {
 }
 
 func (u *UdpStub) onUDPMessage(data []byte) {
-	u.lastActvity = time.Now()
+	u.touch()
 	u.tnl.onClientUDPData(data, u.srcAddress(), u.dstAddress())
 }
 
@@ -101,4 +103,11 @@ func (u *UdpStub) proxy(extra []byte) {
 
 func (u *UdpStub) close() {
 	u.conn.Close()
+}
+
+func (u *UdpStub) touch() {
+	u.lastActvity.Store(time.Now().UnixNano())
+	if u.tnl.idleTimeout > 0 {
+		u.conn.SetReadDeadline(time.Now().Add(u.tnl.idleTimeout))
+	}
 }

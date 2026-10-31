@@ -9,6 +9,7 @@ import (
 	"net"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -38,12 +39,16 @@ const (
 )
 
 type WSTunnel struct {
-	id int
+	users    atomic.Int64
+	health   tunnelHealth
+	draining bool
+	id       int
 
 	websocketURL string
 	reqq         *Reqq
 
 	isActivated bool
+	stopped     chan struct{}
 
 	protector func(fd uint64)
 
@@ -56,12 +61,14 @@ type WSTunnel struct {
 
 	dnsResolver *mydns.AlibbResolver0
 
+	idleTimeout  time.Duration
 	keepaliveLog bool
 }
 
 func newTunnel(id int, dnsResolver *mydns.AlibbResolver0, config *MgrConfig) *WSTunnel {
 	wst := &WSTunnel{
 		id:           id,
+		idleTimeout:  time.Duration(config.IdleTimeoutSeconds) * time.Second,
 		dnsResolver:  dnsResolver,
 		websocketURL: config.WebsocketURL,
 		cache:        newUdpCache(),
@@ -83,6 +90,7 @@ func (tnl *WSTunnel) start() {
 	}
 
 	tnl.isActivated = true
+	tnl.stopped = make(chan struct{})
 
 	go tnl.serveWebsocket()
 }
@@ -92,6 +100,13 @@ func (tnl *WSTunnel) stop() {
 	defer tnl.wsLock.Unlock()
 
 	tnl.isActivated = false
+	if tnl.stopped != nil {
+		select {
+		case <-tnl.stopped:
+		default:
+			close(tnl.stopped)
+		}
+	}
 
 	if tnl.ws != nil {
 		tnl.ws.Close()
@@ -103,7 +118,7 @@ func (tnl *WSTunnel) stop() {
 }
 
 func (tnl *WSTunnel) serveWebsocket() {
-	delayfn := func(eCount int) {
+	delayfn := func(eCount int) bool {
 		tick := 3 * eCount
 		if tick > 30 {
 			tick = 30
@@ -111,14 +126,23 @@ func (tnl *WSTunnel) serveWebsocket() {
 			tick = 3
 		}
 
-		time.Sleep(time.Duration(tick) * time.Second)
+		timer := time.NewTimer(time.Duration(tick) * time.Second)
+		defer timer.Stop()
+		select {
+		case <-timer.C:
+			return true
+		case <-tnl.stopped:
+			return false
+		}
 	}
 
 	failedConnect := 0
-	for tnl.isActivated {
+	for tnl.active() {
 		// connect
 		if failedConnect > 0 {
-			delayfn(failedConnect)
+			if !delayfn(failedConnect) {
+				return
+			}
 		}
 
 		conn, err := tnl.dial()
@@ -156,7 +180,12 @@ func (tnl *WSTunnel) serveWebsocket() {
 
 func (tnl *WSTunnel) onConnected(conn *websocket.Conn) {
 	tnl.wsLock.Lock()
-	defer tnl.wsLock.Unlock()
+	defer func() {
+		tnl.wsLock.Unlock()
+		if tnl.mgr != nil {
+			tnl.mgr.connected(tnl)
+		}
+	}()
 
 	tnl.waitping = 0
 
@@ -180,6 +209,7 @@ func (tnl *WSTunnel) onConnected(conn *websocket.Conn) {
 
 	// save for sending
 	tnl.ws = conn
+	tnl.health = newTunnelHealth(time.Now(), tnl.mgrConfig())
 
 	log.Infof("tunnel %d websocket connected", tnl.id)
 }
@@ -189,12 +219,17 @@ func (tnl *WSTunnel) onDisconnected() {
 	defer tnl.wsLock.Unlock()
 
 	tnl.waitping = 0
+	if tnl.draining {
+		tnl.isActivated = false
+	}
 
 	if tnl.ws != nil {
 		tnl.ws.Close()
 		tnl.ws = nil
 	}
 
+	tnl.reqq.cleanup()
+	tnl.cache.cleanup()
 	log.Infof("tunnel %d websocket disconnected", tnl.id)
 }
 
@@ -218,7 +253,14 @@ func (tnl *WSTunnel) keepalive() {
 		return
 	}
 
-	now := time.Now().UnixMilli()
+	sent := time.Now()
+	now := sent.UnixMilli()
+	tnl.health.pending[uint64(now)] = sent
+	for token, at := range tnl.health.pending {
+		if sent.Sub(at) > time.Minute {
+			delete(tnl.health.pending, token)
+		}
+	}
 	data := make([]byte, 9)
 	data[0] = 1
 	binary.LittleEndian.PutUint64(data[1:], uint64(now))
@@ -233,6 +275,8 @@ func (tnl *WSTunnel) keepalive() {
 }
 
 func (tnl *WSTunnel) sendPong(data []byte) {
+	tnl.wsLock.Lock()
+	defer tnl.wsLock.Unlock()
 	if !tnl.isActivated {
 		return
 	}
@@ -242,9 +286,6 @@ func (tnl *WSTunnel) sendPong(data []byte) {
 		return
 	}
 
-	tnl.wsLock.Lock()
-	defer tnl.wsLock.Unlock()
-
 	conn.SetWriteDeadline(time.Now().Add(websocketWriteDealine * time.Second))
 	err := conn.WriteMessage(websocket.PongMessage, data)
 	if err != nil {
@@ -253,6 +294,11 @@ func (tnl *WSTunnel) sendPong(data []byte) {
 }
 
 func (tnl *WSTunnel) onPong(data []byte) {
+	tnl.wsLock.Lock()
+	defer tnl.wsLock.Unlock()
+	if !tnl.health.pong(data, time.Now()) {
+		return
+	}
 	tnl.waitping = 0
 
 	if !tnl.keepaliveLog {
@@ -289,6 +335,8 @@ func (tnl *WSTunnel) onPong(data []byte) {
 }
 
 func (tnl *WSTunnel) send(data []byte) {
+	tnl.wsLock.Lock()
+	defer tnl.wsLock.Unlock()
 	if !tnl.isActivated {
 		return
 	}
@@ -297,9 +345,6 @@ func (tnl *WSTunnel) send(data []byte) {
 	if conn == nil {
 		return
 	}
-
-	tnl.wsLock.Lock()
-	defer tnl.wsLock.Unlock()
 
 	conn.SetWriteDeadline(time.Now().Add(websocketWriteDealine * time.Second))
 	err := conn.WriteMessage(websocket.BinaryMessage, data)
@@ -331,8 +376,6 @@ func (tnl *WSTunnel) processWebsocketMsg(msg []byte) {
 		log.Error("WSTunnel.processWebsocketMsg empty msg")
 		return
 	}
-
-	tnl.waitping = 0
 
 	cmd := msg[0]
 
@@ -468,7 +511,7 @@ func (tnl *WSTunnel) onClientReqData(idx uint16, tag uint16, data []byte) {
 }
 
 func (tnl *WSTunnel) acceptTCPConn(conn meta.TCPConn) error {
-	req, err := tnl.reqq.alloc(conn)
+	req, err := tnl.allocReq(conn)
 	if err != nil {
 		return err
 	}
@@ -508,7 +551,7 @@ func (tnl *WSTunnel) onClientCreateByID(id *stack.TransportEndpointID, req *Req)
 }
 
 func (tnl *WSTunnel) acceptHttpSocks5TCPConn(conn meta.TCPConn, target *meta.HTTPSocksTargetInfo) error {
-	req, err := tnl.reqq.alloc(conn)
+	req, err := tnl.allocReq(conn)
 	if err != nil {
 		return err
 	}
@@ -561,7 +604,14 @@ func (tnl *WSTunnel) acceptUDPConn(conn meta.UDPConn, extra []byte) error {
 		return fmt.Errorf("conn src %s dst %s already exist", src.String(), dst.String())
 	}
 
+	tnl.wsLock.Lock()
+	if !tnl.isValid() {
+		tnl.wsLock.Unlock()
+		return fmt.Errorf("tunnel disconnected")
+	}
 	tnl.cache.add(ustub)
+	tnl.wsLock.Unlock()
+	defer tnl.cache.ustubs.CompareAndDelete(tnl.cache.key(src, dst), ustub)
 	ustub.proxy(extra)
 
 	return nil
@@ -741,3 +791,12 @@ func parseAddress(network string, msg []byte) net.Addr {
 // 	}
 // 	return nil
 // }
+
+func (tnl *WSTunnel) allocReq(conn meta.TCPConn) (*Req, error) {
+	tnl.wsLock.Lock()
+	defer tnl.wsLock.Unlock()
+	if !tnl.isValid() {
+		return nil, fmt.Errorf("tunnel disconnected")
+	}
+	return tnl.reqq.alloc(conn)
+}

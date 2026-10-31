@@ -46,7 +46,6 @@ func newReq(t *WSTunnel, idx uint16) *Req {
 func (r *Req) free() {
 	if r.conn != nil {
 		r.conn.Close()
-		r.conn = nil
 	}
 }
 
@@ -54,6 +53,9 @@ func (r *Req) onServerData(data []byte, withlog bool) error {
 	// if write failed, return an error, outer should free this request
 	conn := r.conn
 	if conn != nil {
+		if len(data) > 0 {
+			r.touch()
+		}
 		wrote := 0
 		l := len(data)
 		for {
@@ -101,6 +103,7 @@ func (r *Req) proxy() {
 		return
 	}
 
+	r.touch()
 	buf := make([]byte, 16*1024) // 16K
 	for {
 		n, err := conn.Read(buf)
@@ -126,6 +129,7 @@ func (r *Req) proxy() {
 			break
 		}
 
+		r.touch()
 		now := time.Now()
 
 		owner.onClientReqData(r.idx, r.tag, buf[:n])
@@ -136,5 +140,12 @@ func (r *Req) proxy() {
 			ctx.FromBytes = ctx.FromBytes + int64(n)
 			log.Infof("req [%s] --> [%s] tranfor bytes:%d, time:%s", ctx.From, ctx.To, n, elapsed)
 		}
+	}
+}
+
+// touch extends the shared bidirectional idle deadline, not the write timeout.
+func (r *Req) touch() {
+	if r.owner.idleTimeout > 0 && r.conn != nil {
+		r.conn.SetReadDeadline(time.Now().Add(r.owner.idleTimeout))
 	}
 }

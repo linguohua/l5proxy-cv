@@ -28,10 +28,14 @@ type Server struct {
 }
 
 type Tunnel struct {
-	Count int `toml:"count"`
-	Cap   int `toml:"cap"`
+	MaxAgeSeconds int  `toml:"max_age_seconds"`
+	DrainSeconds  int  `toml:"drain_seconds"`
+	RTTRebuild    bool `toml:"rtt_rebuild"`
+	Count         int  `toml:"count"`
+	Cap           int  `toml:"cap"`
 
-	KeepaliveSeconds int `toml:"keepalive"`
+	KeepaliveSeconds   int `toml:"keepalive"`
+	IdleTimeoutSeconds int `toml:"idle_timeout_seconds"`
 
 	KeepaliveLog bool `toml:"logka"`
 }
@@ -72,6 +76,10 @@ func ParseConfig(filePath string) (*Config, error) {
 		return nil, fmt.Errorf("Config file path can not empty")
 	}
 	var config Config
+	config.Tunnel.IdleTimeoutSeconds = 180
+	config.Tunnel.MaxAgeSeconds = 3600
+	config.Tunnel.DrainSeconds = 180
+	config.Tunnel.RTTRebuild = true
 
 	// Read and decode the TOML file
 	if _, err := toml.DecodeFile(filePath, &config); err != nil {
@@ -98,6 +106,13 @@ func ParseConfig(filePath string) (*Config, error) {
 		if config.TunMode.MTU == 0 {
 			config.TunMode.MTU = 1500
 		}
+	}
+
+	if config.Tunnel.MaxAgeSeconds < 0 || config.Tunnel.DrainSeconds < 0 {
+		return nil, fmt.Errorf("tunnel durations must be non-negative")
+	}
+	if config.Tunnel.IdleTimeoutSeconds < 0 {
+		return nil, fmt.Errorf("idle_timeout_seconds must be non-negative")
 	}
 
 	if config.Tunnel.Cap > 200 {

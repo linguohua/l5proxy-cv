@@ -9,6 +9,12 @@ endpoint = "8870f4a1-063f-43a4-bac2-679a443b3d08"
 loglevel = "info"
 
 [tunnel]
+# Proactive replacement; 0 disables age-based replacement.
+max_age_seconds = 3600
+drain_seconds = 180
+rtt_rebuild = true
+# Seconds without data in either direction; 0 disables timeout.
+idle_timeout_seconds = 180
 # count: WebSocket隧道数量，默认是3，一般不用填写,建议使用默认值即可
 count = 1
 # cap: 单个隧道运行同时并发的请求数量，默认是200,建议使用默认值即可

@@ -44,7 +44,9 @@ func (q *Reqq) alloc(conn meta.TCPConn) (*Req, error) {
 		return nil, fmt.Errorf("alloc, req %d is in used", idx)
 	}
 
-	req.tag = req.tag + 1
+	req = newReq(req.owner, idx)
+	req.tag = q.array[idx].tag + 1
+	q.array[idx] = req
 	req.isUsed = true
 	req.conn = conn
 
@@ -65,6 +67,8 @@ func (q *Reqq) allocForReverseProxy(idx, tag uint16) (*Req, error) {
 		return nil, fmt.Errorf("get, req %d:%d is in used", idx, tag)
 	}
 
+	req = newReq(req.owner, idx)
+	q.array[idx] = req
 	req.isUsed = true
 	req.tag = tag
 
@@ -96,8 +100,10 @@ func (q *Reqq) freeInternal(idx uint16, tag uint16) error {
 	// log.Printf("reqq free req %d:%d", idx, tag)
 
 	req.free()
-	req.tag++
-	req.isUsed = false
+	// Keep the old object immutable for its exiting reader.
+	replacement := newReq(req.owner, idx)
+	replacement.tag = req.tag + 1
+	q.array[idx] = replacement
 
 	q.ids = append(q.ids, idx)
 

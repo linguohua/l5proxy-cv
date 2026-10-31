@@ -52,14 +52,18 @@ func (xy *XY) Startup(cfg *config.Config) error {
 	}
 
 	remoteCfg := &remote.MgrConfig{
-		WebsocketURL:     websocketURL,
-		TunnelCount:      cfg.Tunnel.Count,
-		TunnelCap:        cfg.Tunnel.Cap,
-		Protector:        protector,
-		KeepaliveSeconds: cfg.Tunnel.KeepaliveSeconds,
-		KeepaliveLog:     cfg.Tunnel.KeepaliveLog,
-		AliDNS:           cfg.Server.AliDNS,
-		IsDummy:          cfg.Server.IsDummy,
+		MaxAgeSeconds:      cfg.Tunnel.MaxAgeSeconds,
+		DrainSeconds:       cfg.Tunnel.DrainSeconds,
+		RTTRebuild:         cfg.Tunnel.RTTRebuild,
+		WebsocketURL:       websocketURL,
+		TunnelCount:        cfg.Tunnel.Count,
+		TunnelCap:          cfg.Tunnel.Cap,
+		Protector:          protector,
+		KeepaliveSeconds:   cfg.Tunnel.KeepaliveSeconds,
+		IdleTimeoutSeconds: cfg.Tunnel.IdleTimeoutSeconds,
+		KeepaliveLog:       cfg.Tunnel.KeepaliveLog,
+		AliDNS:             cfg.Server.AliDNS,
+		IsDummy:            cfg.Server.IsDummy,
 	}
 
 	remote := remote.NewMgr(remoteCfg)
