@@ -28,7 +28,6 @@ type MgrConfig struct {
 
 	MaxAgeSeconds      int
 	DrainSeconds       int
-	RTTRebuild         bool
 	IdleTimeoutSeconds int
 	KeepaliveSeconds   int
 	KeepaliveLog       bool
@@ -37,14 +36,13 @@ type MgrConfig struct {
 }
 
 type Mgr struct {
-	mu          sync.Mutex
-	pending     map[*WSTunnel]*WSTunnel
-	draining    map[*WSTunnel]time.Time
-	done        chan struct{}
-	lastRebuild time.Time
-	config      MgrConfig
-	index       atomic.Uint64
-	tunnels     []*WSTunnel
+	mu       sync.Mutex
+	pending  map[*WSTunnel]*WSTunnel
+	draining map[*WSTunnel]time.Time
+	done     chan struct{}
+	config   MgrConfig
+	index    atomic.Uint64
+	tunnels  []*WSTunnel
 
 	isActivated bool
 

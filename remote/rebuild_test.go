@@ -59,7 +59,7 @@ func TestReplacementSingleTunnel(t *testing.T) {
 	old.users.Add(1)
 	next.onConnected(testSocket(t))
 	// No maintain tick, Ping or Pong occurs before admission switches.
-	if len(next.health.pending) != 0 || len(next.health.samples) != 0 {
+	if len(next.health.pending) != 0 {
 		t.Fatal("unexpected readiness probe")
 	}
 	selected, err = m.allocateWSTunnel()
@@ -78,34 +78,6 @@ func TestReplacementSingleTunnel(t *testing.T) {
 	}
 	next.stop()
 }
-func TestRTTDetection(t *testing.T) {
-	now := time.Now()
-	h := newTunnelHealth(now.Add(-10*time.Minute), MgrConfig{})
-	for i := 0; i < 60; i++ {
-		h.samples = append(h.samples, rttSample{now.Add(-time.Duration(120+i*5) * time.Second), 50 * time.Millisecond})
-	}
-	for i := 0; i < 12; i++ {
-		h.samples = append(h.samples, rttSample{now.Add(-time.Duration(i*5) * time.Second), 600 * time.Millisecond})
-	}
-	if h.reason(now, 0, true) != "" {
-		t.Fatal("must wait for sustained degradation")
-	}
-	for i := 0; i < 12; i++ {
-		h.samples = append(h.samples, rttSample{now.Add(time.Duration(65-i*5) * time.Second), 600 * time.Millisecond})
-	}
-	if h.reason(now.Add(65*time.Second), 0, true) == "" {
-		t.Fatal("single tunnel historical degradation not detected")
-	}
-	h.slowSince = time.Time{}
-	h.samples = nil
-	for i := 0; i < 12; i++ {
-		h.samples = append(h.samples, rttSample{now.Add(-time.Duration(i) * time.Second), 50 * time.Millisecond})
-	}
-	h.samples = append(h.samples, rttSample{now, 5 * time.Second})
-	if h.reason(now, 50*time.Millisecond, true) != "" || !h.slowSince.IsZero() {
-		t.Fatal("one spike triggered degradation")
-	}
-}
 func TestPongValidationAndAge(t *testing.T) {
 	now := time.Now()
 	h := newTunnelHealth(now, MgrConfig{MaxAgeSeconds: 3600})
@@ -122,7 +94,41 @@ func TestPongValidationAndAge(t *testing.T) {
 	if !h.pong(p, now.Add(time.Millisecond)) || h.pong(p, now.Add(time.Second)) {
 		t.Fatal("matching or duplicate pong handling failed")
 	}
-	if h.reason(now.Add(time.Hour), 0, false) != "maximum age" {
+	if h.reason(now.Add(time.Hour)) != "maximum age" {
 		t.Fatal("age trigger missing")
 	}
+}
+
+func TestKeepaliveOnlyWhenIdle(t *testing.T) {
+	cfg := MgrConfig{TunnelCap: 1}
+	tunnel := newTunnel(0, nil, &cfg)
+	tunnel.isActivated = true
+	tunnel.onConnected(testSocket(t))
+	interval := 5 * time.Second
+	tunnel.tick(time.Now(), interval)
+	if len(tunnel.health.pending) != 0 {
+		t.Fatal("ping immediately after connection")
+	}
+	tunnel.health.lastPing = time.Now().Add(-time.Minute)
+	tunnel.send([]byte{0})
+	tunnel.tick(time.Now(), interval)
+	if len(tunnel.health.pending) != 0 {
+		t.Fatal("ping after outgoing data")
+	}
+	tunnel.health.lastPing = time.Now().Add(-time.Minute)
+	tunnel.waitping = 3
+	tunnel.processWebsocketMsg(nil)
+	tunnel.tick(time.Now(), interval)
+	if len(tunnel.health.pending) != 0 || tunnel.waitping != 0 {
+		t.Fatal("incoming data did not reset keepalive")
+	}
+	tunnel.tick(time.Now().Add(interval), interval)
+	if len(tunnel.health.pending) != 1 || tunnel.waitping != 1 {
+		t.Fatal("idle tunnel did not send ping")
+	}
+	tunnel.tick(time.Now().Add(interval), interval)
+	if tunnel.waitping != 1 {
+		t.Fatal("ping interval not reset")
+	}
+	tunnel.stop()
 }

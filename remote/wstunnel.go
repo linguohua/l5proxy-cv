@@ -233,7 +233,7 @@ func (tnl *WSTunnel) onDisconnected() {
 	log.Infof("tunnel %d websocket disconnected", tnl.id)
 }
 
-func (tnl *WSTunnel) keepalive() {
+func (tnl *WSTunnel) keepaliveIfIdle(at time.Time, interval time.Duration) {
 	tnl.wsLock.Lock()
 	defer tnl.wsLock.Unlock()
 
@@ -246,6 +246,10 @@ func (tnl *WSTunnel) keepalive() {
 		return
 	}
 
+	if at.Sub(tnl.health.lastPing) < interval {
+		return
+	}
+	tnl.health.lastPing = at
 	if tnl.waitping > 3 {
 		log.Errorf("tunnel %d keepalive failed, close websocket", tnl.id)
 		tnl.waitping = 0
@@ -348,6 +352,9 @@ func (tnl *WSTunnel) send(data []byte) {
 
 	conn.SetWriteDeadline(time.Now().Add(websocketWriteDealine * time.Second))
 	err := conn.WriteMessage(websocket.BinaryMessage, data)
+	if err == nil {
+		tnl.health.lastPing = time.Now()
+	}
 	if err != nil {
 		log.Errorf("websocket WriteMessage error:%v", err)
 	}
@@ -372,6 +379,10 @@ func (tnl *WSTunnel) dial() (*websocket.Conn, error) {
 }
 
 func (tnl *WSTunnel) processWebsocketMsg(msg []byte) {
+	tnl.wsLock.Lock()
+	tnl.health.lastPing = time.Now()
+	tnl.waitping = 0
+	tnl.wsLock.Unlock()
 	if len(msg) < 1 {
 		log.Error("WSTunnel.processWebsocketMsg empty msg")
 		return

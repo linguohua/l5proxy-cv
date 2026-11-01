@@ -28,11 +28,10 @@ type Server struct {
 }
 
 type Tunnel struct {
-	MaxAgeSeconds int  `toml:"max_age_seconds"`
-	DrainSeconds  int  `toml:"drain_seconds"`
-	RTTRebuild    bool `toml:"rtt_rebuild"`
-	Count         int  `toml:"count"`
-	Cap           int  `toml:"cap"`
+	MaxAgeSeconds int `toml:"max_age_seconds"`
+	DrainSeconds  int `toml:"drain_seconds"`
+	Count         int `toml:"count"`
+	Cap           int `toml:"cap"`
 
 	KeepaliveSeconds   int `toml:"keepalive"`
 	IdleTimeoutSeconds int `toml:"idle_timeout_seconds"`
@@ -79,7 +78,6 @@ func ParseConfig(filePath string) (*Config, error) {
 	config.Tunnel.IdleTimeoutSeconds = 180
 	config.Tunnel.MaxAgeSeconds = 3600
 	config.Tunnel.DrainSeconds = 180
-	config.Tunnel.RTTRebuild = true
 
 	// Read and decode the TOML file
 	if _, err := toml.DecodeFile(filePath, &config); err != nil {

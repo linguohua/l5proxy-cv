@@ -12,7 +12,6 @@ loglevel = "info"
 # Proactive replacement; 0 disables age-based replacement.
 max_age_seconds = 3600
 drain_seconds = 180
-rtt_rebuild = true
 # Seconds without data in either direction; 0 disables timeout.
 idle_timeout_seconds = 180
 # count: WebSocket隧道数量，默认是3，一般不用填写,建议使用默认值即可

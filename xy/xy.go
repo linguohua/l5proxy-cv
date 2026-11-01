@@ -58,7 +58,6 @@ func (xy *XY) Startup(cfg *config.Config) error {
 	remoteCfg := &remote.MgrConfig{
 		MaxAgeSeconds:      cfg.Tunnel.MaxAgeSeconds,
 		DrainSeconds:       cfg.Tunnel.DrainSeconds,
-		RTTRebuild:         cfg.Tunnel.RTTRebuild,
 		WebsocketURL:       websocketURL,
 		TunnelCount:        cfg.Tunnel.Count,
 		TunnelCap:          cfg.Tunnel.Cap,
