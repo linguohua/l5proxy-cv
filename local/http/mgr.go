@@ -189,8 +189,20 @@ func (rh *requestHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	var tcpConn = setTCPKeepAlive(conn)
 
 	uurl := r.URL
-	targetInfo.DomainName = uurl.Hostname()
-	targetInfo.Port = getTargetPortOrDefault(uurl)
+	targetHost := uurl.Hostname()
+	targetPort := getTargetPortOrDefault(uurl)
+	if targetHost == "" {
+		if host, portStr, splitErr := net.SplitHostPort(r.Host); splitErr == nil {
+			targetHost = host
+			if p, parseErr := strconv.Atoi(portStr); parseErr == nil {
+				targetPort = p
+			}
+		} else {
+			targetHost = r.Host
+		}
+	}
+	targetInfo.DomainName = targetHost
+	targetInfo.Port = targetPort
 
 	var extraBytes []byte
 
@@ -296,6 +308,15 @@ func (mgr *Mgr) Shutdown() error {
 	if err != nil {
 		log.Errorf("localhttp.Mgr shutdown http server failed:%s", err)
 	}
+
+	if mgr.httpsServer != nil {
+		httpsErr := mgr.httpsServer.Shutdown(ctx)
+		if httpsErr != nil {
+			log.Errorf("localhttp.Mgr shutdown https server failed:%s", httpsErr)
+		}
+		mgr.httpsServer = nil
+	}
+	mgr.server = nil
 
 	log.Info("HTTP server shutdown")
 

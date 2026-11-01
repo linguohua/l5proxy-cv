@@ -52,21 +52,8 @@ func (u *UdpStub) writeTo(data []byte, addr net.Addr) error {
 
 	u.touch()
 
-	wrote := 0
-	l := len(data)
-	for {
-		n, err := conn.WriteTo(data[wrote:], addr)
-		if err != nil {
-			return err
-		}
-
-		wrote = wrote + n
-		if wrote == l {
-			break
-		}
-	}
-
-	return nil
+	_, err := conn.WriteTo(data, addr)
+	return err
 }
 
 func (u *UdpStub) onUDPMessage(data []byte) {
@@ -81,7 +68,9 @@ func (u *UdpStub) proxy(extra []byte) {
 		return
 	}
 
-	u.onUDPMessage(extra)
+	if len(extra) > 0 {
+		u.onUDPMessage(extra)
+	}
 
 	buf := make([]byte, 4096)
 	for {
@@ -97,7 +86,6 @@ func (u *UdpStub) proxy(extra []byte) {
 		}
 
 		u.onUDPMessage(buf[:n])
-
 	}
 }
 

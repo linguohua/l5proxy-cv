@@ -57,6 +57,7 @@ func (c *UdpCache) keepalive() {
 	if time.Since(c.lastKeepalive) < udpCacheKeepaliveTime {
 		return
 	}
+	c.lastKeepalive = time.Now()
 
 	deleteUstubs := make([]*UdpStub, 0)
 	c.ustubs.Range(func(key, value any) bool {

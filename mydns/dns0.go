@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"net"
-	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -110,6 +109,8 @@ func AlibbDNSQuery(aliDNS1 string, data []byte, protector func(fd uint64)) ([]by
 
 func resolveHost4(dnsServer, host string, protector func(fd uint64)) (net.IP, error) {
 	msg := new(mkdns.Msg)
+	msg.Id = mkdns.Id()
+	msg.RecursionDesired = true
 	msg.SetQuestion(mkdns.Fqdn(host), mkdns.TypeA)
 	packed, err := msg.Pack() // generate a DNS query packet
 	if err != nil {
@@ -125,6 +126,10 @@ func resolveHost4(dnsServer, host string, protector func(fd uint64)) (net.IP, er
 	err = resp.Unpack(buf)
 	if err != nil {
 		return nil, err
+	}
+
+	if resp.Id != msg.Id {
+		return nil, fmt.Errorf("DNS reply ID mismatch")
 	}
 
 	for _, answer := range resp.Answer {
@@ -143,10 +148,9 @@ func DialWithProtector(dnsResolver *AlibbResolver0, protector func(uint64),
 	var addr2 string
 	if dnsResolver != nil {
 		var hostString, portString string
-		if strings.Contains(addr, ":") {
-			ss := strings.Split(addr, ":")
-			hostString = ss[0]
-			portString = ss[1]
+		if h, p, err := net.SplitHostPort(addr); err == nil {
+			hostString = h
+			portString = p
 		} else {
 			hostString = addr
 			portString = ""
@@ -158,7 +162,7 @@ func DialWithProtector(dnsResolver *AlibbResolver0, protector func(uint64),
 		}
 
 		if len(portString) > 0 {
-			addr2 = fmt.Sprintf("%s:%s", ip.String(), portString)
+			addr2 = net.JoinHostPort(ip.String(), portString)
 		} else {
 			addr2 = ip.String()
 		}

@@ -1,27 +1,18 @@
 package mydns
 
 import (
-	"net"
 	"testing"
 )
 
 func TestResolve(t *testing.T) {
-	// mark := 0x22 // 34
-	// protector := func(fd uint64) {
-	// 	if err := syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, syscall.SO_MARK, mark); err != nil {
-	// 		t.Errorf("failed to set mark:%s", err)
-	// 	}
-	// }
-
-	ip, err := resolveHost4("223.5.5.5:53", "baobei.llwant.com", nil)
+	ip, err := resolveHost4("223.5.5.5:53", "alidns.com", nil)
 	if err != nil {
-		t.Errorf("failed resolveHost:%s", err)
+		t.Skipf("DNS resolution skipped (network or server unavailable): %v", err)
 	}
 
-	addr := net.TCPAddr{
-		IP:   ip,
-		Port: 433,
+	if ip == nil {
+		t.Fatalf("expected resolved IP, got nil")
 	}
 
-	t.Errorf("DNS reply:%s", addr.String())
+	t.Logf("DNS reply for alidns.com: %s", ip.String())
 }

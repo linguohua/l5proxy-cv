@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"os"
 	"sync"
 	"time"
 
@@ -69,11 +70,13 @@ func (s *udpSession) close() {
 	_ = s.listener.Close()
 
 	s.vconnsMu.Lock()
-	for _, vc := range s.vconns {
-		vc.Close()
-	}
+	vconns := s.vconns
 	s.vconns = make(map[string]*socks5VirtualUDPConn)
 	s.vconnsMu.Unlock()
+
+	for _, vc := range vconns {
+		vc.Close()
+	}
 }
 
 func (s *udpSession) serveUDP() {
@@ -181,6 +184,9 @@ type socks5VirtualUDPConn struct {
 	packetCh  chan []byte
 	closeCh   chan struct{}
 	closeOnce sync.Once
+
+	readDeadlineMu sync.Mutex
+	readDeadline   time.Time
 }
 
 func newSocks5VirtualUDPConn(clientAddr *net.UDPAddr, dstIP net.IP, dstPort int, targetDomain string, listener *net.UDPConn, onClose func()) *socks5VirtualUDPConn {
@@ -229,9 +235,26 @@ func (c *socks5VirtualUDPConn) TargetDomain() string {
 }
 
 func (c *socks5VirtualUDPConn) Read(b []byte) (int, error) {
+	c.readDeadlineMu.Lock()
+	deadline := c.readDeadline
+	c.readDeadlineMu.Unlock()
+
+	var timeoutCh <-chan time.Time
+	if !deadline.IsZero() {
+		dur := time.Until(deadline)
+		if dur <= 0 {
+			return 0, os.ErrDeadlineExceeded
+		}
+		timer := time.NewTimer(dur)
+		defer timer.Stop()
+		timeoutCh = timer.C
+	}
+
 	select {
 	case <-c.closeCh:
 		return 0, io.EOF
+	case <-timeoutCh:
+		return 0, os.ErrDeadlineExceeded
 	case data, ok := <-c.packetCh:
 		if !ok {
 			return 0, io.EOF
@@ -309,6 +332,15 @@ func (c *socks5VirtualUDPConn) RemoteAddr() net.Addr {
 	return c.clientAddr
 }
 
-func (c *socks5VirtualUDPConn) SetDeadline(t time.Time) error      { return nil }
-func (c *socks5VirtualUDPConn) SetReadDeadline(t time.Time) error  { return nil }
+func (c *socks5VirtualUDPConn) SetDeadline(t time.Time) error {
+	return c.SetReadDeadline(t)
+}
+
+func (c *socks5VirtualUDPConn) SetReadDeadline(t time.Time) error {
+	c.readDeadlineMu.Lock()
+	c.readDeadline = t
+	c.readDeadlineMu.Unlock()
+	return nil
+}
+
 func (c *socks5VirtualUDPConn) SetWriteDeadline(t time.Time) error { return nil }

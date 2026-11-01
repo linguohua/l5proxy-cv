@@ -2,9 +2,11 @@ package localsocks5
 
 import (
 	"encoding/binary"
+	"errors"
 	"io"
 	"l5proxy_cv/meta"
 	"net"
+	"os"
 	"testing"
 	"time"
 )
@@ -277,3 +279,108 @@ func TestSocks5UDPAssociateIPv4AndSubsequentPackets(t *testing.T) {
 	}
 }
 
+func TestSocks5UDPCloseDeadlockPrevention(t *testing.T) {
+	mockHandler := &mockUDPTransportHandler{
+		handledCh: make(chan struct{}, 10),
+	}
+
+	cfg := &LocalConfig{
+		Address:             "127.0.0.1:0",
+		UDPTransportHandler: mockHandler,
+	}
+
+	mgrObj := NewMgr(cfg)
+	mgr := mgrObj.(*Mgr)
+	err := mgr.Startup()
+	if err != nil {
+		t.Fatalf("Startup failed: %v", err)
+	}
+	defer mgr.Shutdown()
+
+	serverAddr := mgr.listener.Addr().String()
+
+	tcpConn, err := net.Dial("tcp", serverAddr)
+	if err != nil {
+		t.Fatalf("Dial TCP failed: %v", err)
+	}
+
+	// 1. Auth handshake
+	_, _ = tcpConn.Write([]byte{socks5Version, 1, noAuth})
+	authResp := make([]byte, 2)
+	_, _ = io.ReadFull(tcpConn, authResp)
+
+	// 2. Associate
+	_, _ = tcpConn.Write([]byte{socks5Version, associateCommand, 0, ipv4Address, 0, 0, 0, 0, 0, 0})
+	replyBuf := make([]byte, 10)
+	_, _ = io.ReadFull(tcpConn, replyBuf)
+
+	relayIP := net.IP(replyBuf[4:8])
+	relayPort := binary.BigEndian.Uint16(replyBuf[8:10])
+	relayUDPAddr := &net.UDPAddr{IP: relayIP, Port: int(relayPort)}
+
+	clientUDP, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 0})
+	if err != nil {
+		t.Fatalf("ListenUDP failed: %v", err)
+	}
+	defer clientUDP.Close()
+
+	// 3. Send 2 packets to 2 distinct destinations to create multiple vconns
+	makePacket := func(ip net.IP, port uint16, payload string) []byte {
+		hdr := make([]byte, 10)
+		hdr[0] = 0
+		hdr[1] = 0
+		hdr[2] = 0
+		hdr[3] = ipv4Address
+		copy(hdr[4:8], ip.To4())
+		binary.BigEndian.PutUint16(hdr[8:10], port)
+		return append(hdr, []byte(payload)...)
+	}
+
+	_, _ = clientUDP.WriteToUDP(makePacket(net.ParseIP("1.1.1.1"), 53, "test1"), relayUDPAddr)
+	_, _ = clientUDP.WriteToUDP(makePacket(net.ParseIP("8.8.8.8"), 53, "test2"), relayUDPAddr)
+
+	time.Sleep(50 * time.Millisecond)
+
+	// 4. Close TCP conn suddenly - triggers session.close()
+	closedDone := make(chan struct{})
+	go func() {
+		tcpConn.Close()
+		time.Sleep(100 * time.Millisecond)
+		close(closedDone)
+	}()
+
+	select {
+	case <-closedDone:
+		// Succeeded without deadlock!
+	case <-time.After(2 * time.Second):
+		t.Fatalf("Deadlock detected in session.close()!")
+	}
+}
+
+func TestSocks5VirtualUDPConnReadDeadline(t *testing.T) {
+	clientAddr := &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 12345}
+	dstIP := net.ParseIP("1.1.1.1")
+	l, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 0})
+	if err != nil {
+		t.Fatalf("ListenUDP failed: %v", err)
+	}
+	defer l.Close()
+
+	vc := newSocks5VirtualUDPConn(clientAddr, dstIP, 53, "", l, nil)
+	defer vc.Close()
+
+	// Set deadline in very short future
+	vc.SetReadDeadline(time.Now().Add(50 * time.Millisecond))
+
+	buf := make([]byte, 1024)
+	start := time.Now()
+	_, err = vc.Read(buf)
+	elapsed := time.Since(start)
+
+	if !errors.Is(err, os.ErrDeadlineExceeded) {
+		t.Fatalf("expected ErrDeadlineExceeded, got %v", err)
+	}
+	if elapsed < 30*time.Millisecond || elapsed > 1*time.Second {
+		t.Fatalf("unexpected elapsed time: %v", elapsed)
+	}
+}

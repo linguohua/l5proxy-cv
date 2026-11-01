@@ -8,6 +8,7 @@ import (
 	localsocks5 "l5proxy_cv/local/socks5"
 	"l5proxy_cv/meta"
 	"l5proxy_cv/remote"
+	"net/url"
 	"sync"
 
 	log "github.com/sirupsen/logrus"
@@ -41,7 +42,10 @@ func (xy *XY) Startup(cfg *config.Config) error {
 		return fmt.Errorf("xy has startup")
 	}
 
-	websocketURL := fmt.Sprintf("%s?uuid=%s&endpoint=%s", cfg.Server.URL, cfg.Server.UUID, cfg.Server.Endpiont)
+	websocketURL := fmt.Sprintf("%s?uuid=%s&endpoint=%s",
+		cfg.Server.URL,
+		url.QueryEscape(cfg.Server.UUID),
+		url.QueryEscape(cfg.Server.Endpiont))
 
 	var protector func(fd uint64)
 	if cfg.Server.Mark > 0 {
