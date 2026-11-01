@@ -135,14 +135,14 @@ func (mgr *Mgr) HandleHttpSocks5TCP(conn meta.TCPConn, targetInfo *meta.HTTPSock
 		TCPConn: conn3,
 	}
 
-	go mgr.pipeTcpSocket(conn, bc, wg)
-	go mgr.pipeTcpSocket(bc, conn, wg)
+	go mgr.pipeTcpSocket(conn, bc, wg, addr)
+	go mgr.pipeTcpSocket(bc, conn, wg, "")
 
 	log.Infof("proxy[bypass/tcp] to %s", addr)
 	wg.Wait()
 }
 
-func (mgr *Mgr) pipeTcpSocket(from meta.TCPConn, to meta.TCPConn, wg *sync.WaitGroup) {
+func (mgr *Mgr) pipeTcpSocket(from meta.TCPConn, to meta.TCPConn, wg *sync.WaitGroup, target string) {
 	buf := make([]byte, 16*1024) // 16K
 	for {
 		n, err := from.Read(buf)
@@ -159,8 +159,12 @@ func (mgr *Mgr) pipeTcpSocket(from meta.TCPConn, to meta.TCPConn, wg *sync.WaitG
 			break
 		}
 
+		now := time.Now()
 		to.SetWriteDeadline(time.Now().Add(10 * time.Second))
 		n1, err := to.Write(buf[0:n])
+		if target != "" && n1 > 0 {
+			log.Infof("req(tcpl) [%s] --> [%s] tranfor bytes:%d, time:%s", from.RemoteAddr().String(), target, n1, time.Since(now).Round(time.Millisecond))
+		}
 		if n1 != n {
 			to.Close()
 			break

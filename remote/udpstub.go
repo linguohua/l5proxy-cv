@@ -58,7 +58,10 @@ func (u *UdpStub) writeTo(data []byte, addr net.Addr) error {
 
 func (u *UdpStub) onUDPMessage(data []byte) {
 	u.touch()
-	u.tnl.onClientUDPData(data, u.srcAddress(), u.dstAddress())
+	src, dst := u.srcAddress(), u.dstAddress()
+	now := time.Now()
+	u.tnl.onClientUDPData(data, src, dst)
+	log.Infof("req(udpr) [%s] --> [%s] tranfor bytes:%d, time:%s", src.String(), dst.String(), len(data), time.Since(now).Round(time.Millisecond))
 }
 
 func (u *UdpStub) proxy(extra []byte) {

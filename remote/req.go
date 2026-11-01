@@ -138,7 +138,7 @@ func (r *Req) proxy() {
 		elapsed := time.Since(now).Round(time.Millisecond)
 		if ctx != nil {
 			ctx.FromBytes = ctx.FromBytes + int64(n)
-			log.Infof("req [%s] --> [%s] tranfor bytes:%d, time:%s", ctx.From, ctx.To, n, elapsed)
+			log.Infof("req(tcpr) [%s] --> [%s] tranfor bytes:%d, time:%s", ctx.From, ctx.To, n, elapsed)
 		}
 	}
 }
